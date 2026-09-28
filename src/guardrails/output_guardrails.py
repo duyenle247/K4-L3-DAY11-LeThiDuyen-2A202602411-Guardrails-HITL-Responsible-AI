@@ -41,12 +41,16 @@ def content_filter(response: str) -> dict:
 
     # PII patterns to check
     PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
+        # 1. API key: bắt đầu bằng sk-...
+        "api_key": r"\bsk-[a-zA-Z0-9-]+\b",
+        # 2. Password: cụm password/mật khẩu gán giá trị hoặc lộ mật khẩu mặc định
+        "password": r"(?:admin\s+)?password\s*(?:is|[:=])\s*\S+|\badmin123\b",
+        # 3. Email: địa chỉ email chuẩn
+        "email": r"\b[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}\b",
+        # 4. SĐT Việt Nam: 10 đến 11 số bắt đầu bằng 0
+        "phone": r"\b0\d{9,10}\b",
+        # 5. CCCD (12 số) / CMND (9 số)
+        "national_id": r"\b\d{12}\b|\b\d{9}\b",
     }
 
     for name, pattern in PII_PATTERNS.items():
@@ -172,16 +176,32 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        # 1. Gọi content_filter(response_text)
+        filtered = content_filter(response_text)
+        if not filtered["safe"]:
+            self.redacted_count += 1
+            # Thay thế response content bằng bản đã che (redacted)
+            llm_response.content = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=filtered["redacted"])],
+            )
+            response_text = filtered["redacted"]
 
-        return llm_response  # TODO: modify if needed
+        # 2. Nếu sử dụng LLM Judge: gọi llm_safety_check(response_text)
+        if self.use_llm_judge:
+            judge_res = await llm_safety_check(response_text)
+            if not judge_res.get("safe", True):
+                self.blocked_count += 1
+                safe_msg = (
+                    "Tôi không thể chia sẻ thông tin này vì lý do bảo mật và chính sách an toàn của VinBank."
+                )
+                llm_response.content = types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text=safe_msg)],
+                )
+
+        # 3. Trả về llm_response đã được cập nhật
+        return llm_response
 
 
 # ============================================================

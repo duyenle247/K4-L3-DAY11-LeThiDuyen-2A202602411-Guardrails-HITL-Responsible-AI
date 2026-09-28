@@ -51,14 +51,30 @@ def detect_injection(user_input: str) -> InputStatus:
     Returns:
         ``"BLOCK"`` if injection detected (chặn), ``"ALLOW"`` otherwise (cho qua).
     """
+    # 1. Chuẩn hóa chuỗi: loại bỏ các ký tự Unicode ẩn / zero-width characters
+    # (\u200b-\u200f, \ufeff, \u2060, soft hyphen \u00ad, ...)
+    clean_input = re.sub(r"[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\u00ad]", "", user_input)
+    # Chuẩn hóa khoảng trắng
+    clean_input = re.sub(r"\s+", " ", clean_input)
+
     INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
+        # 1. Bỏ qua hướng dẫn (ignore instructions)
+        r"ignore\s+(all\s+)?(previous|above|prior)\s+instructions?",
+        # 2. Thay đổi vai trò (you are now)
+        r"\byou\s+are\s+now\b",
+        # 3. Yêu cầu tiết lộ system prompt
+        r"\bsystem\s+prompt\b",
+        # 4. Yêu cầu tiết lộ prompt/mật khẩu/hướng dẫn bí mật
+        r"\breveal\s+(your\s+|the\s+)?(internal\s+)?(instructions?|prompt|password)",
+        # 5. Giả mạo hoặc đóng vai không giới hạn (pretend / act as unrestricted)
+        r"\bpretend\s+(you\s+are|to\s+be)\b",
+        r"\bact\s+as\s+(a\s+|an\s+)?unrestricted\b",
+        # 6. Dự phòng thêm trường hợp disregard instructions
+        r"disregard\s+(all\s+)?(previous|above|prior)\s+instructions?",
     ]
 
     for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, user_input, re.IGNORECASE):
+        if re.search(pattern, clean_input, re.IGNORECASE):
             return "BLOCK"
     return "ALLOW"
 
@@ -86,12 +102,16 @@ def topic_filter(user_input: str) -> InputStatus:
     """
     input_lower = user_input.lower()
 
-    # TODO: Implement logic:
-    # 1. If input contains any blocked topic -> return "BLOCK"
-    # 2. If input doesn't contain any allowed topic -> return "BLOCK"
-    # 3. Otherwise -> return "ALLOW"
+    # 1. Có chứa chủ đề bị cấm -> BLOCK
+    if any(topic in input_lower for topic in BLOCKED_TOPICS):
+        return "BLOCK"
 
-    pass  # Replace with your implementation
+    # 2. Không chứa bất kỳ chủ đề ngân hàng hợp lệ nào (off-topic) -> BLOCK
+    if not any(topic in input_lower for topic in ALLOWED_TOPICS):
+        return "BLOCK"
+
+    # 3. Câu banking hợp lệ -> ALLOW
+    return "ALLOW"
 
 
 # ============================================================
@@ -144,14 +164,22 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         self.total_count += 1
         text = self._extract_text(user_message)
 
-        # TODO: Implement logic:
-        # 1. Call detect_injection(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 2. Call topic_filter(text)
-        #    - If "BLOCK": increment blocked_count, return self._block_response("...")
-        # 3. If both return "ALLOW": return None (let message through)
+        # 1. Kiểm tra Prompt Injection
+        if detect_injection(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "Yêu cầu bị từ chối: Phát hiện dấu hiệu can thiệp chỉ dẫn (Prompt Injection)."
+            )
 
-        pass  # Replace with your implementation
+        # 2. Kiểm tra chủ đề (Topic Filter)
+        if topic_filter(text) == "BLOCK":
+            self.blocked_count += 1
+            return self._block_response(
+                "Yêu cầu bị từ chối: Câu hỏi không thuộc phạm vi dịch vụ ngân hàng VinBank hoặc chứa chủ đề cấm."
+            )
+
+        # 3. Cả hai đều an toàn -> cho qua (không gọi LLM đối với input bị chặn)
+        return None
 
 
 # ============================================================
